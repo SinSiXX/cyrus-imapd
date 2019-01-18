@@ -2364,6 +2364,17 @@ redo:
     mailbox_close(&mailbox);
 }
 
+static int dlist_getname_internal(struct dlist *parent, const char *name,
+                                  char **mboxnamep)
+{
+    const char *stdname;
+
+    if (!dlist_getatom(parent, name, &stdname)) return 0;
+
+    *mboxnamep = mboxname_from_standard(stdname);
+    return 1;
+}
+
 int sync_apply_reserve(struct dlist *kl,
                        struct sync_reserve_list *reserve_list,
                        struct sync_state *sstate)
@@ -3678,7 +3689,7 @@ int sync_get_sieve(struct dlist *kin, struct sync_state *sstate)
  * so just pick the file out from under the hood */
 int sync_get_message(struct dlist *kin, struct sync_state *sstate)
 {
-    const char *mboxname;
+    char *mboxname;
     const char *partition;
     const char *uniqueid;
     const char *guid;
@@ -3687,10 +3698,7 @@ int sync_get_message(struct dlist *kin, struct sync_state *sstate)
     struct dlist *kl;
     struct message_guid tmp_guid;
     struct stat sbuf;
-    char *intname;
 
-    if (!dlist_getatom(kin, "MBOXNAME", &mboxname))
-        return IMAP_PROTOCOL_BAD_PARAMETERS;
     if (!dlist_getatom(kin, "PARTITION", &partition))
         return IMAP_PROTOCOL_BAD_PARAMETERS;
     if (!dlist_getatom(kin, "UNIQUEID", &uniqueid))
@@ -3701,18 +3709,18 @@ int sync_get_message(struct dlist *kin, struct sync_state *sstate)
         return IMAP_PROTOCOL_BAD_PARAMETERS;
     if (!message_guid_decode(&tmp_guid, guid))
         return IMAP_PROTOCOL_BAD_PARAMETERS;
+    if (!dlist_getname_internal(kin, "MBOXNAME", &mboxname))
+        return IMAP_PROTOCOL_BAD_PARAMETERS;
 
-    intname = mboxname_from_standard(mboxname);
-
-    fname = mboxname_datapath(partition, intname, uniqueid, uid);
+    fname = mboxname_datapath(partition, mboxname, uniqueid, uid);
     if (stat(fname, &sbuf) == -1) {
-        fname = mboxname_archivepath(partition, intname, uniqueid, uid);
+        fname = mboxname_archivepath(partition, mboxname, uniqueid, uid);
         if (stat(fname, &sbuf) == -1) {
-            free(intname);
+            free(mboxname);
             return IMAP_MAILBOX_NONEXISTENT;
         }
     }
-    free(intname);
+    free(mboxname);
 
     kl = dlist_setfile(NULL, "MESSAGE", partition, &tmp_guid, sbuf.st_size, fname);
     sync_send_response(kl, sstate->pout);
@@ -3802,7 +3810,7 @@ int sync_restore_mailbox(struct dlist *kin,
                          struct sync_state *sstate)
 {
     /* fields from the request, all but mboxname are optional */
-    const char *mboxname;
+    char *mboxname;
     const char *uniqueid = NULL;
     const char *partition = NULL;
     const char *mboxtype = NULL;
@@ -3825,10 +3833,9 @@ int sync_restore_mailbox(struct dlist *kin,
     struct dlist *ki;
     int has_append = 0;
     int is_new_mailbox = 0;
-    char *intname;
     int r;
 
-    if (!dlist_getatom(kin, "MBOXNAME", &mboxname)) {
+    if (!dlist_getname_internal(kin, "MBOXNAME", &mboxname)) {
         syslog(LOG_DEBUG, "%s: missing MBOXNAME", __func__);
         return IMAP_PROTOCOL_BAD_PARAMETERS;
     }
@@ -3865,8 +3872,7 @@ int sync_restore_mailbox(struct dlist *kin,
      */
 
     /* open/create mailbox */
-    intname = mboxname_from_standard(mboxname);
-    r = mailbox_open_iwl(intname, &mailbox);
+    r = mailbox_open_iwl(mboxname, &mailbox);
     if (!r) r = sync_mailbox_version_check(&mailbox);
     syslog(LOG_DEBUG, "%s: mailbox_open_iwl %s: %s",
            __func__, mboxname, error_message(r));
@@ -3888,7 +3894,7 @@ int sync_restore_mailbox(struct dlist *kin,
         r = mailbox_open_iwl(mboxname, &mailbox);
         if (!r) r = sync_mailbox_version_check(&mailbox);
         if (r == IMAP_MAILBOX_NONEXISTENT) { // did we win a race?
-            r = mboxlist_createsync(intname, mbtype, partition,
+            r = mboxlist_createsync(mboxname, mbtype, partition,
                                     sstate->userid, sstate->authstate,
                                     options, uidvalidity, createdmodseq,
                                     highestmodseq, acl,
@@ -3899,10 +3905,10 @@ int sync_restore_mailbox(struct dlist *kin,
         }
         mboxname_release(&namespacelock);
     }
-    free(intname);
     if (r) {
         syslog(LOG_ERR, "Failed to open mailbox %s to restore: %s",
                mboxname, error_message(r));
+        free(mboxname);
         return r;
     }
 
@@ -3996,12 +4002,14 @@ int sync_restore_mailbox(struct dlist *kin,
         sync_log_append(mailbox->name);
 
     mailbox_close(&mailbox);
+    free(mboxname);
 
     return r;
 
 bail:
     mailbox_abort(mailbox);
     mailbox_close(&mailbox);
+    free(mboxname);
 
     return r;
 }
