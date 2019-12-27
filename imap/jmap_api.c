@@ -591,6 +591,7 @@ static json_t *lookup_capabilities(const char *accountid,
         jmap_vacation_capabilities(capas);
         jmap_contact_capabilities(capas);
         jmap_calendar_capabilities(capas);
+        jmap_sieve_capabilities(capas);
     }
     else {
         /* Lookup capabilities for shared account */
@@ -986,6 +987,7 @@ HIDDEN void jmap_accounts(json_t *accounts, json_t *primary_accounts)
     json_object_set(primary_accounts, JMAP_URN_VACATION, jprimary);
     json_object_set(primary_accounts, JMAP_CONTACTS_EXTENSION, jprimary);
     json_object_set(primary_accounts, JMAP_CALENDARS_EXTENSION, jprimary);
+    json_object_set(primary_accounts, JMAP_SIEVE_EXTENSION, jprimary);
     json_decref(jprimary);
 
     /* Clean up */
