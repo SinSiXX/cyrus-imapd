@@ -5733,14 +5733,45 @@ static int sync_copyback_mailbox(struct sync_folder *remote,
                                  unsigned flags)
 {
     int local_only = (flags & SYNC_FLAG_LOCALONLY);
+    struct mboxlock *namespacelock = mboxname_usernamespacelock(remote->name);
+
     // first we just create a mailbox with all the right values
     int r = mboxlist_createsync(remote->name, remote->mbtype, remote->part,
                                 /*userid*/NULL, /*authstate*/NULL,
-                                remote->options, remote->uidvalidity, remote->createdmodseq,
+                                remote->options | MAILBOX_OPTIONS_MASK,
+                                remote->uidvalidity, remote->createdmodseq,
                                 remote->highestmodseq, remote->acl,
                                 remote->uniqueid, local_only, 0, NULL);
+
+    mboxname_release(&namespacelock);
+
     if (r) {
         syslog(LOG_ERR, "Failed to create mailbox %s copyback: %s",
+               remote->name, error_message(r));
+        return r;
+    }
+
+    struct mailbox *mailbox = NULL;
+    r = mailbox_open_iwl(remote->name, &mailbox);
+    if (r) {
+        syslog(LOG_ERR, "Failed to reopen mailbox %s after copyback: %s",
+               remote->name, error_message(r));
+        return r;
+    }
+
+    mailbox_index_dirty(mailbox);
+    mailbox->i.recentuid = remote->recentuid;
+    mailbox->i.recenttime = remote->recenttime;
+    mailbox->i.pop3_last_login = remote->pop3_last_login;
+    mailbox->i.pop3_show_after = remote->pop3_show_after;
+    struct sync_annot_list *annots = NULL;
+    r = read_annotations(mailbox, NULL, &annots, 0, 0);
+    if (!r) r = apply_annotations(mailbox, NULL, annots, remote->annots, 0);
+    sync_annot_list_free(&annots);
+    mailbox_close(&mailbox);
+
+    if (r) {
+        syslog(LOG_ERR, "Failed to update mailbox %s after copyback: %s",
                remote->name, error_message(r));
         return r;
     }
