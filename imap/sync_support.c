@@ -4140,10 +4140,32 @@ static int find_reserve_all(struct sync_name_list *mboxname_list,
     struct sync_folder *rfolder;
     struct sync_msgid_list *part_list;
     struct mailbox *mailbox = NULL;
+    mbentry_t *mbentry = NULL;
     int r = 0;
 
     /* Find messages we want to upload that are available on server */
     for (mbox = mboxname_list->head; mbox; mbox = mbox->next) {
+        mboxlist_entry_free(&mbentry);
+        r = mboxlist_lookup_allow_all(mbox->name, &mbentry, NULL);
+        /* Quietly skip over folders which have been deleted since we
+           started working (but record fact in case caller cares) */
+        if (r == IMAP_MAILBOX_NONEXISTENT) {
+            r = 0;
+            continue;
+        }
+        if (r) {
+            syslog(LOG_ERR, "IOERROR: Failed to lookup %s: %s",
+                   mbox->name, error_message(r));
+            goto bail;
+        }
+        if (mbentry->mbtype & (MBTYPE_INTERMEDIATE|MBTYPE_DELETED)) {
+            struct synccrcs synccrcs = { 0, 0 };
+            sync_folder_list_add(master_folders, mbentry->uniqueid, mbentry->name,
+                                 mbentry->mbtype, mbentry->partition, mbentry->acl, 0,
+                                 mbentry->uidvalidity, 0, 0, synccrcs, 0, 0, 0, 0,
+                                 NULL, 0, 0, 0);
+            continue;
+        }
         r = mailbox_open_irl(mbox->name, &mailbox);
         if (!r) r = sync_mailbox_version_check(&mailbox);
 
@@ -4209,6 +4231,7 @@ static int find_reserve_all(struct sync_name_list *mboxname_list,
     }
 
 bail:
+    mboxlist_entry_free(&mbentry);
     mailbox_close(&mailbox);
     return r;
 }
@@ -5909,7 +5932,7 @@ static int do_folders(struct sync_name_list *mboxname_list, const char *topart,
     for (rfolder = replica_folders->head; rfolder; rfolder = rfolder->next)
         strarray_add(&remote_uniqueids, rfolder->uniqueid);
 
-    /* Look for intermediate mailboxes */
+    /* check local uniqueids */
     for (mbox = mboxname_list->head; !r && mbox; mbox = mbox->next) {
         mbentry_t *mbentry = NULL;
 
@@ -5918,28 +5941,7 @@ static int do_folders(struct sync_name_list *mboxname_list, const char *topart,
 
         strarray_add(&local_uniqueids, mbentry->uniqueid);
 
-        if (mbentry->mbtype & MBTYPE_INTERMEDIATE) {
-            struct dlist *kl = dlist_newkvlist(NULL, "MAILBOX");
-
-            dlist_setatom(kl, "UNIQUEID", mbentry->uniqueid);
-            dlist_setatom(kl, "MBOXNAME", mbentry->name);
-            dlist_setatom(kl, "MBOXTYPE",
-                          mboxlist_mbtype_to_string(mbentry->mbtype));
-            dlist_setnum64(kl, "HIGHESTMODSEQ", mbentry->foldermodseq);
-            dlist_setnum64(kl, "CREATEDMODSEQ", mbentry->createdmodseq);
-
-            sync_send_apply(kl, sync_be->out);
-            r = sync_parse_response("MAILBOX", sync_be->in, NULL);
-
-            dlist_free(&kl);
-        }
-
         mboxlist_entry_free(&mbentry);
-
-        if (r) {
-            syslog(LOG_ERR, "apply intermediates: failed: %s", error_message(r));
-            goto bail;
-        }
     }
 
     // remove any uniqueids which exist in both
