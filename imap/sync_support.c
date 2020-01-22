@@ -567,6 +567,7 @@ struct sync_folder *sync_folder_list_add(struct sync_folder_list *l,
                                          uint32_t options,
                                          uint32_t uidvalidity,
                                          uint32_t last_uid,
+                                         modseq_t createdmodseq,
                                          modseq_t highestmodseq,
                                          struct synccrcs synccrcs,
                                          uint32_t recentuid,
@@ -594,6 +595,7 @@ struct sync_folder *sync_folder_list_add(struct sync_folder_list *l,
     result->acl = xstrdupnull(acl);
     result->uidvalidity = uidvalidity;
     result->last_uid = last_uid;
+    result->createdmodseq = createdmodseq;
     result->highestmodseq = highestmodseq;
     result->options = options;
     result->synccrcs = synccrcs;
@@ -4206,8 +4208,8 @@ static int find_reserve_all(struct sync_name_list *mboxname_list,
             struct synccrcs synccrcs = { 0, 0 };
             sync_folder_list_add(master_folders, mbentry->uniqueid, mbentry->name,
                                  mbentry->mbtype, mbentry->partition, mbentry->acl, 0,
-                                 mbentry->uidvalidity, 0, 0, synccrcs, 0, 0, 0, 0,
-                                 NULL, 0, 0, 0);
+                                 mbentry->uidvalidity, 0, mbentry->createdmodseq, 0,
+                                 synccrcs, 0, 0, 0, 0, NULL, 0, 0, 0);
             continue;
         }
         r = mailbox_open_irl(mbox->name, &mailbox);
@@ -4261,7 +4263,7 @@ static int find_reserve_all(struct sync_name_list *mboxname_list,
         sync_folder_list_add(master_folders, mailbox->uniqueid, mailbox->name,
                              mailbox->mbtype,
                              mailbox->part, mailbox->acl, mailbox->i.options,
-                             mailbox->i.uidvalidity, touid,
+                             mailbox->i.uidvalidity, touid, mailbox->i.createdmodseq,
                              tomodseq, mailbox->i.synccrcs,
                              mailbox->i.recentuid, mailbox->i.recenttime,
                              mailbox->i.pop3_last_login,
@@ -4478,6 +4480,7 @@ int sync_response_parse(struct protstream *sync_in, const char *cmd,
             const char *part = NULL;
             const char *acl = NULL;
             const char *options = NULL;
+            modseq_t createdmodseq = 0;
             modseq_t highestmodseq = 0;
             uint32_t uidvalidity = 0;
             uint32_t last_uid = 0;
@@ -4508,6 +4511,7 @@ int sync_response_parse(struct protstream *sync_in, const char *cmd,
             dlist_getatom(kl, "MBOXTYPE", &mboxtype);
             dlist_getnum32(kl, "SYNC_CRC", &synccrcs.basic);
             dlist_getnum32(kl, "SYNC_CRC_ANNOT", &synccrcs.annot);
+            dlist_getnum64(kl, "CREATEDMODSEQ", &createdmodseq);
             dlist_getnum64(kl, "XCONVMODSEQ", &xconvmodseq);
             dlist_getnum64(kl, "RACLMODSEQ", &raclmodseq);
 
@@ -4519,7 +4523,7 @@ int sync_response_parse(struct protstream *sync_in, const char *cmd,
                                  mboxlist_string_to_mbtype(mboxtype),
                                  part, acl,
                                  sync_parse_options(options),
-                                 uidvalidity, last_uid,
+                                 uidvalidity, last_uid, createdmodseq,
                                  highestmodseq, synccrcs,
                                  recentuid, recenttime,
                                  pop3_last_login,

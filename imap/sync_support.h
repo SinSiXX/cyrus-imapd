@@ -137,6 +137,7 @@ struct sync_folder {
     char *part;
     char *acl;
     uint32_t last_uid;
+    modseq_t createdmodseq;
     modseq_t highestmodseq;
     uint32_t options;
     uint32_t uidvalidity;
@@ -168,6 +169,7 @@ struct sync_folder *sync_folder_list_add(struct sync_folder_list *l,
                                          uint32_t options,
                                          uint32_t uidvalidity,
                                          uint32_t last_uid,
+                                         modseq_t createdmodseq,
                                          modseq_t highestmodseq,
                                          struct synccrcs synccrcs,
                                          uint32_t recentuid,
