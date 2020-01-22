@@ -535,6 +535,31 @@ struct sync_folder_list *sync_folder_list_create(void)
     return(l);
 }
 
+struct sync_folder *_folder_remove(struct sync_folder_list *l,
+                                   const char *uniqueid)
+{
+    struct sync_folder *p;
+    struct sync_folder *last = NULL;
+
+    for (p = l->head; p; p = p->next) {
+        if (!strcmp(p->uniqueid, uniqueid)) {
+            // advance head if it was first
+            if (p == l->head) l->head = p->next;
+            // reverse tail if it was last
+            if (p == l->tail) l->tail = last;
+            // stitch across unless it was first
+            if (last) last->next = p->next;
+            // and remove from the list!
+            p->next = NULL;
+            // obviously count has gone down
+            l->count--;
+            return p;
+        }
+        last = p;
+    }
+    return NULL;
+}
+
 struct sync_folder *sync_folder_list_add(struct sync_folder_list *l,
                                          const char *uniqueid, const char *name,
                                          uint32_t mbtype,
@@ -553,22 +578,11 @@ struct sync_folder *sync_folder_list_add(struct sync_folder_list *l,
                                          modseq_t raclmodseq,
                                          int ispartial)
 {
-    // no duplicates allowed by uniqueid
-    struct sync_folder *result = sync_folder_lookup(l, uniqueid);
-    if (result) return result;
-
-    // or by name
-    result = sync_folder_lookup_name(l, name);
+    // no duplicates allowed by name (we can wind up replaying things by uniqueid)
+    struct sync_folder *result = sync_folder_lookup_name(l, name);
     if (result) return result;
 
     result = xzmalloc(sizeof(struct sync_folder));
-
-    if (l->tail)
-        l->tail = l->tail->next = result;
-    else
-        l->head = l->tail = result;
-
-    l->count++;
 
     result->next = NULL;
     result->mailbox = NULL;
@@ -594,6 +608,24 @@ struct sync_folder *sync_folder_list_add(struct sync_folder_list *l,
 
     result->mark     = 0;
     result->reserve  = 0;
+
+    // if we found another by uniqueid, maybe we keep this one, maybe the other one!
+    struct sync_folder *other = sync_folder_lookup(l, uniqueid);
+
+    if (!other || (other->mbtype & MBTYPE_DELETED)) {
+        // keep this one, other goes on the pile
+        result->others = _folder_remove(l, uniqueid);
+        if (l->tail)
+            l->tail = l->tail->next = result;
+        else
+            l->head = l->tail = result;
+        l->count++;
+    }
+    else {
+        // keep the other one, this goes on the others pile
+        result->others = other->others;
+        other->others = result;
+    }
 
     return result;
 }
@@ -622,24 +654,36 @@ struct sync_folder *sync_folder_lookup_name(struct sync_folder_list *l,
     return NULL;
 }
 
+static void _item_free(struct sync_folder *item)
+{
+    free(item->uniqueid);
+    free(item->name);
+    free(item->part);
+    free(item->acl);
+    sync_annot_list_free(&item->annots);
+    free(item);
+}
+
 void sync_folder_list_free(struct sync_folder_list **lp)
 {
     struct sync_folder_list *l = *lp;
     if (!l) return;
-    struct sync_folder *current, *next;
+    struct sync_folder *current, *next, *other;
 
     if (!l) return;
 
-    current = l->head;
-    while (current) {
-        next = current->next;
-        free(current->uniqueid);
-        free(current->name);
-        free(current->part);
-        free(current->acl);
-        sync_annot_list_free(&current->annots);
-        free(current);
+    next = l->head;
+    while (next) {
         current = next;
+        next = current->next;
+        other = current->others;
+        _item_free(current);
+        while (other) {
+            current = other;
+            assert(!current->next);
+            other = current->others;
+            _item_free(current);
+        }
     }
     free(l);
     *lp = NULL;

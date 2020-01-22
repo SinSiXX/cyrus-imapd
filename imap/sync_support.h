@@ -129,6 +129,7 @@ void sync_reserve_list_free(struct sync_reserve_list **list);
 
 struct sync_folder {
     struct sync_folder *next;
+    struct sync_folder *others;
     struct mailbox *mailbox;
     char *uniqueid;
     char *name;
