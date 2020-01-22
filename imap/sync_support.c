@@ -5726,6 +5726,34 @@ done:
     return r;
 }
 
+static int sync_copyback_mailbox(struct sync_folder *remote,
+                                 const char *topart,
+                                 struct sync_reserve_list *reserve_list,
+                                 struct backend *sync_be,
+                                 unsigned flags)
+{
+    int local_only = (flags & SYNC_FLAG_LOCALONLY);
+    // first we just create a mailbox with all the right values
+    int r = mboxlist_createsync(remote->name, remote->mbtype, remote->part,
+                                /*userid*/NULL, /*authstate*/NULL,
+                                remote->options, remote->uidvalidity, remote->createdmodseq,
+                                remote->highestmodseq, remote->acl,
+                                remote->uniqueid, local_only, 0, NULL);
+    if (r) {
+        syslog(LOG_ERR, "Failed to create mailbox %s copyback: %s",
+               remote->name, error_message(r));
+        return r;
+    }
+
+    // then we show that it's empty so we can copy all the emails back
+    // NB: we're just duplicating pointers here without xstrdup, so don't clean them up!
+    struct sync_folder local = *remote;
+    local.highestmodseq = 0;
+    local.last_uid = 0;
+
+    return sync_update_mailbox(&local, remote, topart, reserve_list, sync_be, flags);
+}
+
 int sync_update_mailbox(struct sync_folder *local,
                         struct sync_folder *remote,
                         const char *topart,
@@ -6042,8 +6070,8 @@ static int do_folders(struct sync_name_list *mboxname_list, const char *topart,
         goto bail;
     }
 
-    /* Tag folders on server which still exist on the client. Anything
-     * on the server which remains untagged can be deleted immediately */
+    /* Tag folders on replica which have an entry on the master. Anything
+     * on the replica which remains untagged will have to be copied back! */
     for (mfolder = master_folders->head; mfolder; mfolder = mfolder->next) {
         if (mfolder->mark) continue;
         rfolder = sync_folder_lookup(replica_folders, mfolder->uniqueid);
@@ -6054,19 +6082,23 @@ static int do_folders(struct sync_name_list *mboxname_list, const char *topart,
         /* does it need a rename? partition change is a rename too */
         part = topart ? topart : mfolder->part;
         if (strcmp(mfolder->name, rfolder->name) || strcmp(part, rfolder->part)) {
+            // XXX - we should be able to detect which way the rename should happen
+            // by reading through rfolder->others and mfolder->others looking for
+            // matches
             sync_rename_list_add(rename_folders, mfolder->uniqueid, rfolder->name,
                                  mfolder->name, part, mfolder->uidvalidity);
         }
     }
 
-    /* XXX - sync_log_channel_user on any issue here rather than trying to solve,
-     * and remove all entries related to that user from both lists */
-
+    /* NOTE: this can fail if there's something else with the same name that
+     * that the replica has, but with a different UNIQUEID on the master.  The
+     * only fix for that kind of split brain is to manually rename at one end! */
     for (rfolder = replica_folders->head; rfolder; rfolder = rfolder->next) {
         if (rfolder->mark) continue;
-        r = sync_folder_delete(rfolder->name, sync_be, flags);
+        r = sync_copyback_mailbox(rfolder, topart, reserve_list,
+                                  sync_be, flags);
         if (r) {
-            syslog(LOG_ERR, "sync_folder_delete(): failed: %s '%s'",
+            syslog(LOG_ERR, "sync_folder_reversecreate(): failed: %s '%s'",
                    rfolder->name, error_message(r));
             goto bail;
         }

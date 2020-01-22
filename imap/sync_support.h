@@ -155,6 +155,8 @@ struct sync_folder {
     int   reserve;  /* Folder has been processed by reserve operation */
 };
 
+#define FOLDER_ALIVE(f) (!((f)->mbtype & MBTYPE_DELETED))
+
 struct sync_folder_list {
     struct sync_folder *head, *tail;
     unsigned long count;
