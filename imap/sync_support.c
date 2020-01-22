@@ -5960,6 +5960,7 @@ static int do_folders(struct sync_name_list *mboxname_list, const char *topart,
         int i;
         for (i = 0; i < strarray_size(&remote_uniqueids); i++) {
             char *mboxname = mboxlist_find_uniqueid(strarray_nth(&remote_uniqueids, i), NULL, NULL);
+            if (!mboxname) continue;
             sync_name_list_add(mboxname_list, mboxname);
             free(mboxname);
         }
