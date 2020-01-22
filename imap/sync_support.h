@@ -481,8 +481,7 @@ const char *sync_restore(struct dlist *kin,
 #define SYNC_FLAG_VERBOSE   (1<<0)
 #define SYNC_FLAG_LOGGING   (1<<1)
 #define SYNC_FLAG_LOCALONLY (1<<2)
-#define SYNC_FLAG_DELETE_REMOTE (1<<3)
-#define SYNC_FLAG_NO_COPYBACK (1<<4)
+#define SYNC_FLAG_NO_COPYBACK (1<<3)
 
 int sync_do_seen(const char *userid, char *uniqueid, struct backend *sync_be,
                  unsigned flags);

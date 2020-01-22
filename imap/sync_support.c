@@ -6012,16 +6012,13 @@ static int do_folders(struct sync_name_list *mboxname_list, const char *topart,
     /* XXX - sync_log_channel_user on any issue here rather than trying to solve,
      * and remove all entries related to that user from both lists */
 
-    /* Delete folders on server which no longer exist on client */
-    if (flags & SYNC_FLAG_DELETE_REMOTE) {
-        for (rfolder = replica_folders->head; rfolder; rfolder = rfolder->next) {
-            if (rfolder->mark) continue;
-            r = sync_folder_delete(rfolder->name, sync_be, flags);
-            if (r) {
-                syslog(LOG_ERR, "sync_folder_delete(): failed: %s '%s'",
-                       rfolder->name, error_message(r));
-                goto bail;
-            }
+    for (rfolder = replica_folders->head; rfolder; rfolder = rfolder->next) {
+        if (rfolder->mark) continue;
+        r = sync_folder_delete(rfolder->name, sync_be, flags);
+        if (r) {
+            syslog(LOG_ERR, "sync_folder_delete(): failed: %s '%s'",
+                   rfolder->name, error_message(r));
+            goto bail;
         }
     }
 
@@ -6129,15 +6126,8 @@ int sync_do_mailboxes(struct sync_name_list *mboxname_list, const char *topart,
     r = sync_response_parse(sync_be->in, "MAILBOXES", replica_folders,
                             NULL, NULL, NULL, NULL);
 
-    /* we don't want to delete remote folders which weren't found locally,
-     * because we may be racing with a rename, and we don't want to lose
-     * the remote files.  A real delete will always have inserted a
-     * UNMAILBOX anyway */
-    if (!r) {
-        flags &= ~SYNC_FLAG_DELETE_REMOTE;
-        r = do_folders(mboxname_list, topart,
-                       replica_folders, sync_be, channelp, flags);
-    }
+    if (!r) r = do_folders(mboxname_list, topart, replica_folders,
+                           sync_be, channelp, flags);
 
     sync_folder_list_free(&replica_folders);
 
@@ -6234,10 +6224,6 @@ static int do_user_main(const char *user, const char *topart,
 
     r = mboxlist_usermboxtree(user, NULL, do_mailbox_info, &info, MBOXTREE_DELETED|MBOXTREE_TOMBSTONES);
 
-    /* we know all the folders present on the master, so it's safe to delete
-     * anything not mentioned here on the replica - at least until we get
-     * real tombstones */
-    flags |= SYNC_FLAG_DELETE_REMOTE;
     if (!r) r = do_folders(info.mboxlist, topart,
                            replica_folders, sync_be, channelp, flags);
     if (!r) r = sync_do_user_quota(info.quotalist, replica_quota,
