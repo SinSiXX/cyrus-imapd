@@ -3076,16 +3076,37 @@ struct mbox_rock {
     struct sync_name_list *qrl;
 };
 
-static int sync_mailbox_byname(const char *name, void *rock)
+static int sync_mailbox_byentry(const mbentry_t *mbentry, void *rock)
 {
     struct mbox_rock *mrock = (struct mbox_rock *) rock;
     struct sync_name_list *qrl = mrock->qrl;
     struct mailbox *mailbox = NULL;
     struct dlist *kl = dlist_newkvlist(NULL, "MAILBOX");
     annotate_state_t *astate = NULL;
-    int r;
 
-    r = mailbox_open_irl(name, &mailbox);
+    if (mbentry->mbtype & (MBTYPE_DELETED|MBTYPE_INTERMEDIATE)) {
+        dlist_setatom(kl, "UNIQUEID", mbentry->uniqueid);
+        dlist_setatom(kl, "MBOXNAME", mbentry->name);
+        dlist_setatom(kl, "MBOXTYPE", mboxlist_mbtype_to_string(mbentry->mbtype));
+        dlist_setnum32(kl, "UIDVALIDITY", mbentry->uidvalidity);
+        dlist_setatom(kl, "PARTITION", mbentry->partition);
+        // this nonsense we probably don't need, but sync_client might barf without it
+        dlist_setatom(kl, "ACL", mbentry->acl);
+        dlist_setnum32(kl, "SYNC_CRC", 0);
+        dlist_setnum32(kl, "LAST_UID", 0);
+        dlist_setnum64(kl, "HIGHESTMODSEQ", 0);
+        dlist_setnum32(kl, "RECENTUID", 0);
+        dlist_setdate(kl, "RECENTTIME", 0);
+        dlist_setdate(kl, "LAST_APPENDDATE", 0);
+        dlist_setdate(kl, "POP3_LAST_LOGIN", 0);
+        dlist_setdate(kl, "POP3_SHOW_AFTER", 0);
+        dlist_setatom(kl, "OPTIONS", "");
+
+        sync_send_response(kl, mrock->pout);
+        goto out;
+    }
+
+    int r = mailbox_open_irl(mbentry->name, &mailbox);
     if (!r) r = sync_mailbox_version_check(&mailbox);
     /* doesn't exist?  Probably not finished creating or removing yet */
     if (r == IMAP_MAILBOX_NONEXISTENT ||
@@ -3119,6 +3140,19 @@ out:
     return r;
 }
 
+static int sync_mailbox_byname(const char *name, void *rock)
+{
+    mbentry_t *mbentry = NULL;
+    int r = mboxlist_lookup_allow_all(name, &mbentry, NULL);
+    if (r == IMAP_MAILBOX_NONEXISTENT ||
+        r == IMAP_MAILBOX_RESERVED) {
+        return 0;
+    }
+    r = sync_mailbox_byentry(mbentry, rock);
+    mboxlist_entry_free(&mbentry);
+    return r;
+}
+
 static int sync_mailbox_byuniqueid(const char *uniqueid, void *rock)
 {
     char *name = mboxlist_find_uniqueid(uniqueid, NULL, NULL);
@@ -3126,11 +3160,6 @@ static int sync_mailbox_byuniqueid(const char *uniqueid, void *rock)
     int r = sync_mailbox_byname(name, rock);
     free(name);
     return r;
-}
-
-static int mailbox_cb(const mbentry_t *mbentry, void *rock)
-{
-    return sync_mailbox_byname(mbentry->name, rock);
 }
 
 int sync_get_fullmailbox(struct dlist *kin, struct sync_state *sstate)
@@ -3281,7 +3310,7 @@ int sync_get_user(struct dlist *kin, struct sync_state *sstate)
     mrock.qrl = quotaroots;
     mrock.pout = sstate->pout;
 
-    r = mboxlist_usermboxtree(userid, NULL, mailbox_cb, &mrock, MBOXTREE_DELETED);
+    r = mboxlist_usermboxtree(userid, NULL, sync_mailbox_byentry, &mrock, MBOXTREE_DELETED|MBOXTREE_TOMBSTONES);
     if (r) goto bail;
 
     for (qr = quotaroots->head; qr; qr = qr->next) {
@@ -6203,7 +6232,7 @@ static int do_user_main(const char *user, const char *topart,
     info.mboxlist = sync_name_list_create();
     info.quotalist = sync_name_list_create();
 
-    r = mboxlist_usermboxtree(user, NULL, do_mailbox_info, &info, MBOXTREE_DELETED);
+    r = mboxlist_usermboxtree(user, NULL, do_mailbox_info, &info, MBOXTREE_DELETED|MBOXTREE_TOMBSTONES);
 
     /* we know all the folders present on the master, so it's safe to delete
      * anything not mentioned here on the replica - at least until we get
