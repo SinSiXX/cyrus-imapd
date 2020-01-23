@@ -130,6 +130,7 @@ int mboxlist_parse_entry(mbentry_t **mbentryptr,
                          const char *data, size_t datalen);
 
 mbentry_t *mboxlist_entry_copy(const mbentry_t *src);
+mbentry_t *mboxlist_entry_copy_deleted(const mbentry_t *src);
 
 void mboxlist_entry_free(mbentry_t **mbentryptr);
 
@@ -338,6 +339,8 @@ int mboxlist_mboxtree(const char *mboxname, mboxlist_cb *proc, void *rock, int f
 int mboxlist_usermboxtree(const char *userid, const struct auth_state *auth_state,
                           mboxlist_cb *proc, void *rock, int flags);
 int mboxlist_usersubs(const char *userid, mboxlist_cb *proc, void *rock, int flags);
+
+int mboxlist_foreach_uniqueid(const char *uniqueid, mboxlist_cb *proc, void *rock, int flags);
 
 strarray_t *mboxlist_sublist(const char *userid);
 

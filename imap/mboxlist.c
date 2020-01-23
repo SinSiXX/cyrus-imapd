@@ -129,7 +129,27 @@ EXPORTED mbentry_t *mboxlist_entry_copy(const mbentry_t *src)
     copy->uniqueid = xstrdupnull(src->uniqueid);
 
     copy->legacy_specialuse = xstrdupnull(src->legacy_specialuse);
-    copy->deletedentry = mboxlist_entry_copy(src->deletedentry);
+    copy->deletedentry = mboxlist_entry_copy_deleted(src->deletedentry);
+
+    return copy;
+}
+
+EXPORTED mbentry_t *mboxlist_entry_copy_deleted(const mbentry_t *src)
+{
+    if (!src) return NULL;
+
+    mbentry_t *copy = mboxlist_entry_create();
+    copy->name = xstrdupnull(src->name);
+
+    copy->mtime = src->mtime;
+    copy->uidvalidity = src->uidvalidity;
+    copy->mbtype = MBTYPE_DELETED;
+    copy->createdmodseq = src->createdmodseq;
+    copy->foldermodseq = src->foldermodseq;
+
+    copy->uniqueid = xstrdupnull(src->uniqueid);
+
+    copy->deletedentry = mboxlist_entry_copy_deleted(src->deletedentry);
 
     return copy;
 }
@@ -685,6 +705,32 @@ EXPORTED char *mboxlist_find_uniqueid(const char *uniqueid, const char *userid,
     return rock.mboxname;
 }
 
+struct _foreach_uniqueid_data {
+    const char *uniqueid;
+    mboxlist_cb *proc;
+    void *rock;
+};
+
+static int _foreach_uniqueid(const mbentry_t *mbentry, void *rock) {
+    struct _foreach_uniqueid_data *d = rock;
+
+    if (!strcmpsafe(d->uniqueid, mbentry->uniqueid))
+        return d->proc(mbentry, d->rock);
+
+    return 0;
+}
+
+// calling this function without a userid is fine, it will scan the entire server!
+EXPORTED int mboxlist_foreach_uniqueid(const char *uniqueid, mboxlist_cb *proc,
+                                       void *rock, int flags)
+{
+    struct _foreach_uniqueid_data crock = { uniqueid, proc, rock };
+
+    init_internal();
+
+    return mboxlist_allmbox("", _foreach_uniqueid, &crock, flags);
+}
+
 /* given a mailbox name, find the staging directory.  XXX - this should
  * require more locking, and staging directories should be by pid */
 HIDDEN int mboxlist_findstage(const char *name, char *stagedir, size_t sd_len)
@@ -1212,8 +1258,7 @@ EXPORTED int mboxlist_update_intermediaries(const char *frommboxname,
                     modseq = mboxname_nextmodseq(mboxname, mbentry->foldermodseq,
                                                  mbtype, 1 /* dofolder */);
 
-                mbentry_t *newmbentry = mboxlist_entry_copy(mbentry);
-                newmbentry->mbtype = MBTYPE_DELETED;
+                mbentry_t *newmbentry = mboxlist_entry_copy_deleted(mbentry);
                 newmbentry->foldermodseq = modseq;
 
                 syslog(LOG_NOTICE,
@@ -1249,6 +1294,7 @@ EXPORTED int mboxlist_update_intermediaries(const char *frommboxname,
         newmbentry->foldermodseq = modseq;
         newmbentry->mbtype = MBTYPE_INTERMEDIATE;
         newmbentry->foldermodseq = modseq;
+        newmbentry->deletedentry = mboxlist_entry_copy_deleted(mbentry);
 
         syslog(LOG_NOTICE,
                "mboxlist: creating intermediate with children: %s (%s)",
@@ -1382,8 +1428,7 @@ static int mboxlist_createmailbox_full(const char *mboxname, int mbtype,
         newmbentry->foldermodseq = newmailbox->i.highestmodseq;
     }
     if (oldmbentry) {
-        newmbentry->deletedentry = mboxlist_entry_copy(oldmbentry);
-        newmbentry->deletedentry->mbtype = MBTYPE_DELETED;
+        newmbentry->deletedentry = mboxlist_entry_copy_deleted(oldmbentry);
         newmbentry->deletedentry->mtime = time(NULL);
     }
     r = mboxlist_update_entry(mboxname, newmbentry, NULL);
@@ -2273,8 +2318,7 @@ EXPORTED int mboxlist_renamemailbox(const mbentry_t *mbentry,
                                                        newmbentry->mbtype, 1);
         mboxlist_entry_free(&newmbentry->deletedentry);
         if (oldmbentry) {
-            newmbentry->deletedentry = mboxlist_entry_copy(oldmbentry);
-            newmbentry->deletedentry->mbtype = MBTYPE_DELETED;
+            newmbentry->deletedentry = mboxlist_entry_copy_deleted(oldmbentry);
             newmbentry->deletedentry->mtime = time(NULL);
         }
 
@@ -2361,8 +2405,7 @@ EXPORTED int mboxlist_renamemailbox(const mbentry_t *mbentry,
 
     mboxlist_entry_free(&newmbentry->deletedentry);
     if (oldmbentry) {
-        newmbentry->deletedentry = mboxlist_entry_copy(oldmbentry);
-        newmbentry->deletedentry->mbtype = MBTYPE_DELETED;
+        newmbentry->deletedentry = mboxlist_entry_copy_deleted(oldmbentry);
         newmbentry->deletedentry->mtime = time(NULL);
     }
 
@@ -2375,10 +2418,8 @@ EXPORTED int mboxlist_renamemailbox(const mbentry_t *mbentry,
         /* delete the old entry */
         if (!isusermbox) {
             /* store a DELETED marker */
-            mbentry_t *oldmbentry = mboxlist_entry_copy(mbentry);
-            oldmbentry->mbtype = MBTYPE_DELETED;
-            oldmbentry->foldermodseq = oldmailbox ?
-                mailbox_modseq_dirty(oldmailbox) : mbentry->foldermodseq + 1;
+            mbentry_t *oldmbentry = mboxlist_entry_copy_deleted(mbentry);
+            oldmbentry->foldermodseq = newmbentry->foldermodseq;
 
             r = mboxlist_update_entry(oldname, oldmbentry, &tid);
 

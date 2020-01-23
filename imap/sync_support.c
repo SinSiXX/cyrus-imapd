@@ -3201,11 +3201,7 @@ static int sync_mailbox_byname(const char *name, void *rock)
 
 static int sync_mailbox_byuniqueid(const char *uniqueid, void *rock)
 {
-    char *name = mboxlist_find_uniqueid(uniqueid, NULL, NULL);
-    if (!name) return 0;
-    int r = sync_mailbox_byname(name, rock);
-    free(name);
-    return r;
+    return mboxlist_foreach_uniqueid(uniqueid, sync_mailbox_byentry, rock, /*flags*/0);
 }
 
 int sync_get_fullmailbox(struct dlist *kin, struct sync_state *sstate)
@@ -6018,6 +6014,13 @@ bail:
 
 /* ====================================================================== */
 
+static int _addname(const mbentry_t *mbentry, void *rock)
+{
+    struct sync_name_list *mboxname_list = rock;
+    sync_name_list_add(mboxname_list, mbentry->name);
+    return 0;
+}
+
 static int do_folders(struct sync_name_list *mboxname_list, const char *topart,
                       struct sync_folder_list *replica_folders,
                       struct backend *sync_be,
@@ -6078,13 +6081,10 @@ static int do_folders(struct sync_name_list *mboxname_list, const char *topart,
     if (strarray_size(&remote_uniqueids)) {
         int i;
         for (i = 0; i < strarray_size(&remote_uniqueids); i++) {
-            char *mboxname = mboxlist_find_uniqueid(strarray_nth(&remote_uniqueids, i), NULL, NULL);
-            if (!mboxname) continue;
-            sync_name_list_add(mboxname_list, mboxname);
-            free(mboxname);
+            mboxlist_foreach_uniqueid(strarray_nth(&remote_uniqueids, i), _addname, mboxname_list,
+                                      MBOXTREE_TOMBSTONES|MBOXTREE_INTERMEDIATES);
         }
     }
-
 
     if (channelp) {
         batchsize = config_getint(IMAPOPT_SYNC_BATCHSIZE);
