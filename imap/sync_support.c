@@ -6110,6 +6110,32 @@ static int do_folders(struct sync_name_list *mboxname_list, const char *topart,
         if (rfolder->mark) continue;
         rfolder->mark = 1;
 
+
+        /* does it no longer exist on the master?  Remove it from the replica */
+        if (!FOLDER_ALIVE(mfolder)) {
+            /* if it's tombstones at both ends, nothing to do! */
+            if (!FOLDER_ALIVE(rfolder)) continue;
+            r = sync_folder_delete(rfolder->name, sync_be, flags);
+            if (r) {
+                syslog(LOG_ERR, "sync_folder_delete(): failed: %s '%s'",
+                       rfolder->name, error_message(r));
+                goto bail;
+            }
+            continue;
+        }
+
+        /* was it destroyed replica?  Remove it from the master! */
+        if (!FOLDER_ALIVE(rfolder)) {
+            r = mboxlist_deletemailboxlock(mfolder->name, 1, NULL, NULL,
+                                           NULL, 0, 0, 1, 0);
+            if (r) {
+                syslog(LOG_ERR, "local_folder_delete(): failed: %s '%s'",
+                       rfolder->name, error_message(r));
+                goto bail;
+            }
+            continue;
+        }
+
         /* does it need a rename? partition change is a rename too */
         part = topart ? topart : mfolder->part;
         if (strcmp(mfolder->name, rfolder->name) || strcmp(part, rfolder->part)) {
