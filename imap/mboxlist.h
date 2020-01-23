@@ -114,6 +114,8 @@ struct mboxlist_entry {
     char *uniqueid;
     /* legacy upgrade support */
     char *legacy_specialuse;
+    /* history thingy */
+    struct mboxlist_entry *deletedentry;
 };
 
 typedef struct mboxlist_entry mbentry_t;

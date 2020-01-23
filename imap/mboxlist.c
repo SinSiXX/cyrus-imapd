@@ -148,6 +148,8 @@ EXPORTED void mboxlist_entry_free(mbentry_t **mbentryptr)
 
     free(mbentry->legacy_specialuse);
 
+    mboxlist_entry_free(&mbentry->deletedentry);
+
     free(mbentry);
 
     *mbentryptr = NULL;
@@ -362,6 +364,7 @@ EXPORTED uint32_t mboxlist_string_to_mbtype(const char *string)
 
 struct parseentry_rock {
     struct mboxlist_entry *mbentry;
+    ptrarray_t stack;
     struct buf *aclbuf;
     int doingacl;
 };
@@ -373,11 +376,28 @@ int parseentry_cb(int type, struct dlistsax_data *d)
     switch(type) {
     case DLISTSAX_KVLISTSTART:
         if (!strcmp(buf_cstring(&d->kbuf), "A")) {
+            buf_reset(rock->aclbuf);
             rock->doingacl = 1;
+        }
+        else if (!strcmp(buf_cstring(&d->kbuf), "D")) {
+            ptrarray_push(&rock->stack, rock->mbentry);
+            rock->mbentry = mboxlist_entry_create();
+        }
+        else {
+            abort();
         }
         break;
     case DLISTSAX_KVLISTEND:
-        rock->doingacl = 0;
+        if (rock->doingacl) {
+            rock->doingacl = 0;
+            rock->mbentry->acl = buf_newcstring(rock->aclbuf);
+        }
+        else {
+            mbentry_t *mbentry = ptrarray_pop(&rock->stack);
+            assert(mbentry);
+            mbentry->deletedentry = rock->mbentry;
+            rock->mbentry = mbentry;
+        }
         break;
     case DLISTSAX_STRING:
         if (rock->doingacl) {
@@ -424,6 +444,7 @@ int parseentry_cb(int type, struct dlistsax_data *d)
  * full dlist format is:
  *  A: _a_cl
  *  C  _c_reatedmodseq
+ *  D: _d_eletedentry (aka: previous tombstone)
  *  F: _f_oldermodseq
  *  I: unique_i_d
  *  M: _m_time
@@ -460,7 +481,7 @@ EXPORTED int mboxlist_parse_entry(mbentry_t **mbentryptr,
         rock.aclbuf = &aclbuf;
         aclbuf.len = 0;
         r = dlist_parsesax(data, datalen, 0, parseentry_cb, &rock);
-        if (!r) mbentry->acl = buf_newcstring(&aclbuf);
+        ptrarray_fini(&rock.stack);
         goto done;
     }
 
