@@ -2096,6 +2096,122 @@ EXPORTED int mboxlist_renametree(const char *oldname, const char *newname,
     return r;
 }
 
+static int _rename_move_partition(const mbentry_t *mbentry,
+                                  const char *partition,
+                                  int local_only)
+{
+    int r;
+    const char *oldname = mbentry->name;
+    int mupdatecommiterror = 0;
+    struct mailbox *oldmailbox = NULL;
+    const char *root = NULL;
+    mupdate_handle *mupdate_h = NULL;
+    mbentry_t *newmbentry = NULL;
+
+    assert_namespacelocked(mbentry->name);
+
+    // intermediates don't need to be moved
+    if (mbentry->mbtype & MBTYPE_INTERMEDIATE) return 0;
+
+    /* 1. open mailbox */
+    r = mailbox_open_iwl(oldname, &oldmailbox);
+    if (r) return r;
+
+    const char *oldpath = mailbox_datapath(oldmailbox, 0);
+
+    /* No partition, we're definitely not moving anywhere */
+    if (!partition) {
+        r = IMAP_MAILBOX_EXISTS;
+        goto done;
+    }
+
+    /* this is OK because it uses a different static buffer */
+    root = config_partitiondir(partition);
+    if (!root) {
+        r = IMAP_PARTITION_UNKNOWN;
+        goto done;
+    }
+    if (!strncmp(root, oldpath, strlen(root)) &&
+        oldpath[strlen(root)] == '/') {
+        /* partitions are the same or share common prefix */
+        r = IMAP_MAILBOX_EXISTS;
+        goto done;
+    }
+
+    r = mailbox_copy_files(oldmailbox, partition, oldmailbox->name, oldmailbox->uniqueid);
+    if (r) goto done;
+
+    newmbentry = mboxlist_entry_copy(mbentry);
+    free(newmbentry->partition);
+    newmbentry->partition = xstrdupnull(partition);
+    newmbentry->foldermodseq = oldmailbox->i.highestmodseq;
+
+    r = mboxlist_update_entry(mbentry->name, newmbentry, NULL);
+    if (r) {
+        syslog(LOG_ERR, "DBERROR: partition move failed %s: %s",
+               mbentry->name, cyrusdb_strerror(r));
+        r = IMAP_IOERROR;
+        goto done;
+    }
+
+    if (!local_only && config_mupdate_server) {
+        /* commit the mailbox in MUPDATE */
+        char *loc = strconcat(config_servername, "!", partition, (char *)NULL);
+
+        r = mupdate_connect(config_mupdate_server, NULL, &mupdate_h, NULL);
+        if (!r) r = mupdate_activate(mupdate_h, mbentry->name, loc, newmbentry->acl);
+        if (r) {
+            syslog(LOG_ERR,
+                   "MUPDATE: can't commit mailbox entry for '%s'",
+                   mbentry->name);
+            mupdatecommiterror = r;
+        }
+        if (mupdate_h) mupdate_disconnect(&mupdate_h);
+        free(loc);
+    }
+
+ done: /* Commit or cleanup */
+    if (r) {
+        /* rollback DB changes if it was an mupdate failure */
+        if (mupdatecommiterror) {
+            r = mboxlist_update_entry(oldname, mbentry, NULL);
+            if (r) {
+                /* XXX HOWTO repair this mess! */
+                syslog(LOG_ERR, "DBERROR: failed DB rollback on partition move %s: %s",
+                       mbentry->name, cyrusdb_strerror(r));
+                syslog(LOG_ERR, "DBERROR: mailboxdb on mupdate and backend ARE NOT CONSISTENT");
+                syslog(LOG_ERR, "DBERROR: mailboxdb on mupdate has entry for %s, mailboxdb on backend has entry for %s",
+                       mbentry->partition, partition);
+                r = IMAP_IOERROR;
+                mailbox_delete_cleanup(NULL, mbentry->partition, mbentry->name, mbentry->uniqueid);
+            } else {
+                r = mupdatecommiterror;
+                mailbox_delete_cleanup(NULL, partition, mbentry->name, mbentry->uniqueid);
+            }
+        }
+        else {
+            mailbox_delete_cleanup(NULL, partition, mbentry->name, mbentry->uniqueid);
+        }
+
+        mailbox_close(&oldmailbox);
+    } else {
+        if (config_auditlog)
+            syslog(LOG_NOTICE, "auditlog: partitionmove sessionid=<%s> "
+                   "mailbox=<%s> uniqueid=<%s> oldpart=<%s> newpart=<%s>",
+                   session_id(),
+                   oldmailbox->name, oldmailbox->uniqueid,
+                   mbentry->partition, partition);
+        /* this will sync-log the name anyway */
+        mailbox_close(&oldmailbox);
+        mailbox_delete_cleanup(NULL, mbentry->partition, mbentry->name, mbentry->uniqueid);
+    }
+
+    /* free memory */
+    mboxlist_entry_free(&newmbentry);
+
+    return r;
+}
+
 /*
  * Rename/move a single mailbox (recursive renames are handled at a
  * higher level).  This only supports local mailboxes.  Remote
@@ -2116,12 +2232,10 @@ EXPORTED int mboxlist_renamemailbox(const mbentry_t *mbentry,
     int mupdatecommiterror = 0;
     long myrights;
     int isusermbox = 0; /* Are we renaming someone's inbox */
-    int partitionmove = 0;
     struct mailbox *oldmailbox = NULL;
     struct mailbox *newmailbox = NULL;
     strarray_t inter = STRARRAY_INITIALIZER;
     struct txn *tid = NULL;
-    const char *root = NULL;
     char *newpartition = NULL;
     mupdate_handle *mupdate_h = NULL;
     mbentry_t *newmbentry = NULL;
@@ -2132,10 +2246,11 @@ EXPORTED int mboxlist_renamemailbox(const mbentry_t *mbentry,
     assert_namespacelocked(mbentry->name);
     assert_namespacelocked(newname);
 
-    if (!strcmp(oldname, newname))
-        return _rename_move_partition(mbentry, newname, partition, uidvalidity, isadmin,
-                                      userid, auth_state, mboxevent, local_only, forceuser,
-                                      ignorequota, keep_intermediaries, move_subscription, silent);
+    if (!strcmp(oldname, newname)) {
+        // only admins can do partition moves
+        if (!isadmin) return IMAP_PERMISSION_DENIED;
+        return _rename_move_partition(mbentry, partition, local_only);
+    }
 
     r = mboxlist_create_namecheck(newname, userid, auth_state,
                                   isadmin, forceuser, &oldmbentry);
@@ -2176,59 +2291,6 @@ EXPORTED int mboxlist_renamemailbox(const mbentry_t *mbentry,
 
     /* 2. verify valid move */
     /* XXX - handle remote mailbox */
-
-    /* special case: same mailbox, must be a partition move */
-    if (!strcmp(oldname, newname)) {
-        const char *oldpath = mailbox_datapath(oldmailbox, 0);
-
-        /* Only admin can move mailboxes between partitions */
-        if (!isadmin) {
-            r = IMAP_PERMISSION_DENIED;
-            goto done;
-        }
-
-        /* No partition, we're definitely not moving anywhere */
-        if (!partition) {
-            r = IMAP_MAILBOX_EXISTS;
-            goto done;
-        }
-
-        /* let mupdate code below know it was a partition move */
-        partitionmove = 1;
-
-        /* this is OK because it uses a different static buffer */
-        root = config_partitiondir(partition);
-        if (!root) {
-            r = IMAP_PARTITION_UNKNOWN;
-            goto done;
-        }
-        if (!strncmp(root, oldpath, strlen(root)) &&
-            oldpath[strlen(root)] == '/') {
-            /* partitions are the same or share common prefix */
-            r = IMAP_MAILBOX_EXISTS;
-            goto done;
-        }
-
-        /* NOTE: this is a rename to the same mailbox name on a
-         * different partition.  This is a pretty filthy hack,
-         * which should be handled by having four totally different
-         * codepaths: INBOX -> INBOX.foo, user rename, regular rename
-         * and of course this one, partition move */
-        newpartition = xstrdup(partition);
-        r = mailbox_copy_files(oldmailbox, newpartition, newname, oldmailbox->uniqueid);
-        if (r) goto done;
-
-        newmbentry = mboxlist_entry_copy(mbentry);
-        free(newmbentry->partition);
-        newmbentry->partition = xstrdupnull(newpartition);
-        newmbentry->foldermodseq = oldmailbox->i.highestmodseq;
-
-        r = mboxlist_update_entry(newname, newmbentry, &tid);
-        if (r) goto done;
-
-        /* skip ahead to the commit */
-        goto dbdone;
-    }
 
     if (!isadmin) {
         r = _rename_check_specialuse(oldname, newname);
@@ -2334,8 +2396,6 @@ EXPORTED int mboxlist_renamemailbox(const mbentry_t *mbentry,
         }
     } while (r == CYRUSDB_AGAIN);
 
- dbdone:
-
     /* 3. Commit transaction */
     r = cyrusdb_commit(mbdb, tid);
 
@@ -2369,11 +2429,9 @@ EXPORTED int mboxlist_renamemailbox(const mbentry_t *mbentry,
         char *loc = strconcat(config_servername, "!", newpartition, (char *)NULL);
 
         r = mupdate_connect(config_mupdate_server, NULL, &mupdate_h, NULL);
-        if (!partitionmove) {
-            if (!r && !isusermbox)
-                r = mupdate_delete(mupdate_h, oldname);
-            if (!r) r = mupdate_reserve(mupdate_h, newname, loc);
-        }
+        if (!r && !isusermbox)
+            r = mupdate_delete(mupdate_h, oldname);
+        if (!r) r = mupdate_reserve(mupdate_h, newname, loc);
         if (!r) r = mupdate_activate(mupdate_h, newname, loc, newmbentry->acl);
         if (r) {
             syslog(LOG_ERR,
@@ -2429,8 +2487,6 @@ EXPORTED int mboxlist_renamemailbox(const mbentry_t *mbentry,
         }
 
         if (newmailbox) mailbox_delete(&newmailbox);
-        if (partitionmove && newpartition)
-            mailbox_delete_cleanup(NULL, newpartition, newname, oldmailbox->uniqueid);
         mailbox_close(&oldmailbox);
     } else {
         if (newmailbox) {
@@ -2464,21 +2520,6 @@ EXPORTED int mboxlist_renamemailbox(const mbentry_t *mbentry,
 
             /* and log an append so that squatter indexes it */
             sync_log_append(newname);
-        }
-        else if (partitionmove) {
-            char *oldpartition = xstrdup(oldmailbox->part);
-            char *olduniqueid = xstrdup(oldmailbox->uniqueid);
-            if (config_auditlog)
-                syslog(LOG_NOTICE, "auditlog: partitionmove sessionid=<%s> "
-                       "mailbox=<%s> uniqueid=<%s> oldpart=<%s> newpart=<%s>",
-                       session_id(),
-                       oldmailbox->name, oldmailbox->uniqueid,
-                       oldpartition, partition);
-            /* this will sync-log the name anyway */
-            mailbox_close(&oldmailbox);
-            mailbox_delete_cleanup(NULL, oldpartition, oldname, olduniqueid);
-            free(olduniqueid);
-            free(oldpartition);
         }
         else if (mbentry->mbtype & MBTYPE_INTERMEDIATE) {
             /* no event notification */
