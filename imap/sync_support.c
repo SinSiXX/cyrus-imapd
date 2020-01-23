@@ -560,6 +560,18 @@ struct sync_folder *_folder_remove(struct sync_folder_list *l,
     return NULL;
 }
 
+static struct sync_folder *_folder_exact(struct sync_folder_list *l,
+                                         const char *name, const char *userid)
+{
+    struct sync_folder *p;
+
+    for (p = l->head; p; p = p->next) {
+        if (!strcmp(p->name, name) && !strcmp(p->uniqueid, uniqueid))
+            return p;
+    }
+    return NULL;
+}
+
 struct sync_folder *sync_folder_list_add(struct sync_folder_list *l,
                                          const char *uniqueid, const char *name,
                                          uint32_t mbtype,
@@ -579,8 +591,8 @@ struct sync_folder *sync_folder_list_add(struct sync_folder_list *l,
                                          modseq_t raclmodseq,
                                          int ispartial)
 {
-    // no duplicates allowed by name (we can wind up replaying things by uniqueid)
-    struct sync_folder *result = sync_folder_lookup_name(l, name);
+    // no exact duplicates allowed
+    struct sync_folder *result = _folder_exact(l, name, uniqueid);
     if (result) return result;
 
     result = xzmalloc(sizeof(struct sync_folder));
@@ -639,18 +651,6 @@ struct sync_folder *sync_folder_lookup(struct sync_folder_list *l,
 
     for (p = l->head; p; p = p->next) {
         if (!strcmp(p->uniqueid, uniqueid))
-            return p;
-    }
-    return NULL;
-}
-
-struct sync_folder *sync_folder_lookup_name(struct sync_folder_list *l,
-                                            const char *name)
-{
-    struct sync_folder *p;
-
-    for (p = l->head; p; p = p->next) {
-        if (!strcmp(p->name, name))
             return p;
     }
     return NULL;
