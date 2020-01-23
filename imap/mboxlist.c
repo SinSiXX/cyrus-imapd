@@ -814,6 +814,7 @@ static int mboxlist_update_entry(const char *name, const mbentry_t *mbentry, str
 
     if (mbentry) {
         char *mboxent = mboxlist_entry_cstring(mbentry);
+        syslog(LOG_NOTICE, "WRITEENTRY: %s %s", name, mboxent);
         r = cyrusdb_store(mbdb, name, strlen(name), mboxent, strlen(mboxent), txn);
         free(mboxent);
 
