@@ -994,6 +994,7 @@ static int mboxlist_create_namecheck(const char *mboxname,
                                      int isadmin, int force_subdirs, mbentry_t **mbentryp)
 {
     mbentry_t *mbentry = NULL;
+    mbentry_t *parentmbentry = NULL;
     int r = 0;
 
     /* policy first */
