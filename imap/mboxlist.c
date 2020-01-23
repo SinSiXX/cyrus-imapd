@@ -218,11 +218,8 @@ EXPORTED const char *mboxlist_mbtype_to_string(uint32_t mbtype)
     return buf_cstring(&buf);
 }
 
-static char *mboxlist_entry_cstring(const mbentry_t *mbentry)
+static void _mbentry_to_dl(struct dlist *dl, const mbentry_t *mbentry)
 {
-    struct buf buf = BUF_INITIALIZER;
-    struct dlist *dl = dlist_newkvlist(NULL, mbentry->name);
-
     if (mbentry->acl)
         _write_acl(dl, mbentry->acl);
 
@@ -247,7 +244,19 @@ static char *mboxlist_entry_cstring(const mbentry_t *mbentry)
     if (mbentry->foldermodseq)
         dlist_setnum64(dl, "F", mbentry->foldermodseq);
 
+    if (mbentry->deletedentry)
+        _mbentry_to_dl(dlist_newkvlist(dl, "D"), mbentry->deletedentry);
+
     dlist_setdate(dl, "M", time(NULL));
+}
+
+
+static char *mboxlist_entry_cstring(const mbentry_t *mbentry)
+{
+    struct buf buf = BUF_INITIALIZER;
+    struct dlist *dl = dlist_newkvlist(NULL, mbentry->name);
+
+    _mbentry_to_dl(dl, mbentry);
 
     dlist_printbuf(dl, 0, &buf);
 
