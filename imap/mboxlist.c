@@ -1008,30 +1008,34 @@ static int mboxlist_create_namecheck(const char *mboxname,
     }
 
     /* Check to see if mailbox already exists */
-    r = mboxlist_lookup(mboxname, &mbentry, NULL);
-    if (r != IMAP_MAILBOX_NONEXISTENT) {
-        if (!r) {
-            r = IMAP_MAILBOX_EXISTS;
-
-            /* Lie about error if privacy demands */
-            if (!isadmin &&
-                !(cyrus_acl_myrights(auth_state, mbentry->acl) & ACL_LOOKUP)) {
-                r = IMAP_PERMISSION_DENIED;
-            }
+    r = mboxlist_lookup_allow_all(mboxname, &mbentry, NULL);
+    switch (r) {
+    case 0:
+        if (mbentry->mbtype & (MBTYPE_DELETED|MBTYPE_INTERMEDIATE)) break;
+        r = IMAP_MAILBOX_EXISTS;
+        /* Lie about error if privacy demands */
+        if (!isadmin &&
+            !(cyrus_acl_myrights(auth_state, mbentry->acl) & ACL_LOOKUP)) {
+            r = IMAP_PERMISSION_DENIED;
         }
-
         goto done;
+        break;
+    case IMAP_MAILBOX_NONEXISTENT:
+        break;
+    default:
+        goto done;
+        break;
     }
 
     /* look for a parent mailbox */
-    r = mboxlist_findparent(mboxname, &mbentry);
+    r = mboxlist_findparent(mboxname, &parentmbentry);
     if (r == 0) {
         /* found a parent */
         char root[MAX_MAILBOX_NAME+1];
 
         /* check acl */
         if (!isadmin &&
-            !(cyrus_acl_myrights(auth_state, mbentry->acl) & ACL_CREATE)) {
+            !(cyrus_acl_myrights(auth_state, parentmbentry->acl) & ACL_CREATE)) {
             r = IMAP_PERMISSION_DENIED;
             goto done;
         }
@@ -1068,6 +1072,7 @@ static int mboxlist_create_namecheck(const char *mboxname,
 done:
     if (!r && mbentryp) *mbentryp = mbentry;
     else mboxlist_entry_free(&mbentry);
+    mboxlist_entry_free(&parentmbentry);
 
     return r;
 }
