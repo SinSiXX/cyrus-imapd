@@ -1379,7 +1379,7 @@ static int mboxlist_createmailbox_full(const char *mboxname, int mbtype,
     if (oldmbentry) {
         newmbentry->deletedentry = mboxlist_entry_copy(oldmbentry);
         newmbentry->deletedentry->mbtype = MBTYPE_DELETED;
-        newmbentry->deletedentry->mtime = time();
+        newmbentry->deletedentry->mtime = time(NULL);
     }
     r = mboxlist_update_entry(mboxname, newmbentry, NULL);
 
@@ -2270,7 +2270,7 @@ EXPORTED int mboxlist_renamemailbox(const mbentry_t *mbentry,
         if (oldmbentry) {
             newmbentry->deletedentry = mboxlist_entry_copy(oldmbentry);
             newmbentry->deletedentry->mbtype = MBTYPE_DELETED;
-            newmbentry->deletedentry->mtime = time();
+            newmbentry->deletedentry->mtime = time(NULL);
         }
 
         /* skip ahead to the database update */
@@ -2358,7 +2358,7 @@ EXPORTED int mboxlist_renamemailbox(const mbentry_t *mbentry,
     if (oldmbentry) {
         newmbentry->deletedentry = mboxlist_entry_copy(oldmbentry);
         newmbentry->deletedentry->mbtype = MBTYPE_DELETED;
-        newmbentry->deletedentry->mtime = time();
+        newmbentry->deletedentry->mtime = time(NULL);
     }
 
 
