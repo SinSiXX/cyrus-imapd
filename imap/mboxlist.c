@@ -2132,6 +2132,11 @@ EXPORTED int mboxlist_renamemailbox(const mbentry_t *mbentry,
     assert_namespacelocked(mbentry->name);
     assert_namespacelocked(newname);
 
+    if (!strcmp(oldname, newname))
+        return _rename_move_partition(mbentry, newname, partition, uidvalidity, isadmin,
+                                      userid, auth_state, mboxevent, local_only, forceuser,
+                                      ignorequota, keep_intermediaries, move_subscription, silent);
+
     r = mboxlist_create_namecheck(newname, userid, auth_state,
                                   isadmin, forceuser, &oldmbentry);
     if (r) goto done;
