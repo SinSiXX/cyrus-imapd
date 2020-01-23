@@ -561,7 +561,7 @@ struct sync_folder *_folder_remove(struct sync_folder_list *l,
 }
 
 static struct sync_folder *_folder_exact(struct sync_folder_list *l,
-                                         const char *name, const char *userid)
+                                         const char *name, const char *uniqueid)
 {
     struct sync_folder *p;
 
