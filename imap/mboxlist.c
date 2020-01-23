@@ -247,10 +247,11 @@ static void _mbentry_to_dl(struct dlist *dl, const mbentry_t *mbentry)
     if (mbentry->foldermodseq)
         dlist_setnum64(dl, "F", mbentry->foldermodseq);
 
+    if (mbentry->mtime)
+        dlist_setdate(dl, "M", mbentry->mtime);
+
     if (mbentry->deletedentry)
         _mbentry_to_dl(dlist_newkvlist(dl, "D"), mbentry->deletedentry);
-
-    dlist_setdate(dl, "M", time(NULL));
 }
 
 
@@ -258,6 +259,8 @@ static char *mboxlist_entry_cstring(const mbentry_t *mbentry)
 {
     struct buf buf = BUF_INITIALIZER;
     struct dlist *dl = dlist_newkvlist(NULL, mbentry->name);
+
+    mbentry->mtime = time();
 
     _mbentry_to_dl(dl, mbentry);
 
@@ -395,9 +398,6 @@ int parseentry_cb(int type, struct dlistsax_data *d)
             ptrarray_push(&rock->stack, rock->mbentry);
             rock->mbentry = mboxlist_entry_create();
         }
-        else {
-            abort();
-        }
         break;
     case DLISTSAX_KVLISTEND:
         if (rock->doingacl) {
@@ -406,9 +406,10 @@ int parseentry_cb(int type, struct dlistsax_data *d)
         }
         else {
             mbentry_t *mbentry = ptrarray_pop(&rock->stack);
-            assert(mbentry);
-            mbentry->deletedentry = rock->mbentry;
-            rock->mbentry = mbentry;
+            if (mbentry) {
+                mbentry->deletedentry = rock->mbentry;
+                rock->mbentry = mbentry;
+            }
         }
         break;
     case DLISTSAX_STRING:
