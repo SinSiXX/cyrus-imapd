@@ -705,35 +705,6 @@ EXPORTED char *mboxlist_find_uniqueid(const char *uniqueid, const char *userid,
     return rock.mboxname;
 }
 
-struct _foreach_uniqueid_data {
-    const char *uniqueid;
-    mboxlist_cb *proc;
-    void *rock;
-};
-
-static int _foreach_uniqueid(const mbentry_t *mbentry, void *rock) {
-    struct _foreach_uniqueid_data *d = rock;
-
-    while (mbentry) {
-        if (!strcmpsafe(d->uniqueid, mbentry->uniqueid))
-            return d->proc(mbentry, d->rock);
-        mbentry = mbentry->deletedentry;
-    }
-
-    return 0;
-}
-
-// calling this function without a userid is fine, it will scan the entire server!
-EXPORTED int mboxlist_foreach_uniqueid(const char *uniqueid, mboxlist_cb *proc,
-                                       void *rock, int flags)
-{
-    struct _foreach_uniqueid_data crock = { uniqueid, proc, rock };
-
-    init_internal();
-
-    return mboxlist_allmbox("", _foreach_uniqueid, &crock, flags);
-}
-
 /* given a mailbox name, find the staging directory.  XXX - this should
  * require more locking, and staging directories should be by pid */
 HIDDEN int mboxlist_findstage(const char *name, char *stagedir, size_t sd_len)
@@ -870,10 +841,10 @@ static int mboxlist_update_runiqueid(const char *name, const mbentry_t *oldmbent
     int r = 0;
 
     for (old = oldmbentry; old; old = old->deletedentry)
-        strarray_add(&oldids, old->uniqueid);
+        if (old->uniqueid) strarray_add(&oldids, old->uniqueid);
 
     for (new = newmbentry; new; new = new->deletedentry)
-        strarray_add(&newids, new->uniqueid);
+        if (new->uniqueid) strarray_add(&newids, new->uniqueid);
 
     strarray_subtract_complement(&oldids, &newids);
     strarray_subtract_complement(&newids, &oldids);
@@ -3234,6 +3205,95 @@ EXPORTED int mboxlist_allmbox(const char *prefix, mboxlist_cb *proc, void *rock,
                         allmbox_p, allmbox_cb, &mbrock, 0);
 
     mboxlist_entry_free(&mbrock.mbentry);
+
+    return r;
+}
+
+struct runqrock {
+    int prefixlen;
+    strarray_t *list;
+};
+
+static int runq_cb(void *rock,
+                   const char *key, size_t keylen,
+                   const char *data __attribute__((unused)),
+                   size_t datalen __attribute__((unused)))
+{
+    struct runqrock *runqrock = (struct runqrock *)rock;
+    strarray_appendm(runqrock->list, xstrndup(key + runqrock->prefixlen, keylen - runqrock->prefixlen));
+    return 0;
+}
+
+static int mboxlist_runiqueid_matches(struct db *db,
+                                      const char *uniqueid,
+                                      strarray_t *matches)
+{
+    struct buf prefix = BUF_INITIALIZER;
+    struct runqrock runqrock = { 0, matches };
+
+    /* direct access by userid */
+    mboxlist_runiqueid_key(uniqueid, NULL, &prefix);
+    /* this is the prefix */
+    runqrock.prefixlen = buf_len(&prefix);
+    cyrusdb_foreach(db,
+                    buf_cstring(&prefix),
+                    buf_len(&prefix),
+                    NULL, runq_cb, &runqrock, NULL);
+
+    buf_free(&prefix);
+    return 0;
+}
+
+struct _foreach_uniqueid_data {
+    const char *uniqueid;
+    mboxlist_cb *proc;
+    void *rock;
+};
+
+static int _foreach_uniqueid(const mbentry_t *mbentry, void *rock) {
+    struct _foreach_uniqueid_data *d = rock;
+    const mbentry_t *item;
+
+    for (item = mbentry; item; item = item->deletedentry) {
+        if (!strcmpsafe(d->uniqueid, item->uniqueid)) {
+            // child items might not have the name, but we want it in the callback.  This hack works around it :)
+            mbentry_t copy = *item;
+            copy.name = mbentry->name;
+            return d->proc(&copy, d->rock);
+        }
+    }
+
+    return 0;
+}
+
+EXPORTED int mboxlist_foreach_uniqueid(const char *uniqueid, mboxlist_cb *proc,
+                                       void *rock, int flags)
+{
+    struct _foreach_uniqueid_data crock = { uniqueid, proc, rock };
+    struct allmb_rock mbrock = { NULL, _foreach_uniqueid, &crock, flags };
+    int r = 0;
+
+    init_internal();
+
+    if (!cyrusdb_fetch(mbdb, "$RUNQ", 5, NULL, NULL, NULL)) {
+        strarray_t matches = STRARRAY_INITIALIZER;
+
+        r = mboxlist_runiqueid_matches(mbdb, uniqueid, &matches);
+        int i;
+
+        for (i = 0; i < strarray_size(&matches); i++) {
+            const char *mboxname = strarray_nth(&matches, i);
+            r = cyrusdb_forone(mbdb, mboxname, strlen(mboxname),
+                            allmbox_p, allmbox_cb, &mbrock, 0);
+            if (r) break;
+        }
+
+        mboxlist_entry_free(&mbrock.mbentry);
+        strarray_fini(&matches);
+    }
+    else {
+        r = mboxlist_allmbox("", _foreach_uniqueid, &crock, flags);
+    }
 
     return r;
 }
