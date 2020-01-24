@@ -275,6 +275,8 @@ int mboxlist_sync_setacls(const char *name, const char *acl);
 int mboxlist_set_racls(int enabled);
 int mboxlist_set_runiqueid(int enabled);
 
+int mboxlist_cleanup_deletedentries(const mbentry_t *mbentry, time_t mark);
+
 modseq_t mboxlist_foldermodseq_dirty(struct mailbox *mailbox);
 
 struct findall_data {

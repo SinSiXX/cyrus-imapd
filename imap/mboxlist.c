@@ -4678,3 +4678,32 @@ EXPORTED int mboxlist_delayed_delete_isenabled(void)
 
     return(config_delete_mode == IMAP_ENUM_DELETE_MODE_DELAYED);
 }
+
+EXPORTED int mboxlist_cleanup_deletedentries(const mbentry_t *mbentry, time_t mark)
+{
+    int r = IMAP_MAILBOX_NONEXISTENT;
+    if (!mbentry->deletedentry) return r;
+
+    mbentry_t *copy = mboxlist_entry_copy(mbentry);
+
+    mbentry_t *prev = copy;
+    mbentry_t *item;
+    for (item = prev->deletedentry; item; item = prev->deletedentry) {
+        if (item->mtime < mark) {
+            prev->deletedentry = item->deletedentry;
+            item->deletedentry = NULL;
+            mboxlist_entry_free(&item);
+            r = 0;
+        }
+        else {
+            prev = item;
+        }
+    }
+
+    // if we changed anything, r becomes zero, so we have to write
+    if (!r) r = mboxlist_update_entry(mbentry->name, copy, NULL);
+
+    return r;
+}
+
+
