@@ -6194,6 +6194,29 @@ static int do_folders(struct sync_name_list *mboxname_list, const char *topart,
         }
 
         if (!rename_success) {
+            for (item = rename_folders->head; item; item = item->next) {
+                if (item->done) continue;
+
+                item2 = sync_rename_lookup(rename_folders, item->newname);
+                if (!item2) continue;
+
+                // look for an unused name in the history of item2
+
+            /* Found unprocessed item which should rename cleanly */
+            r = folder_rename(item->oldname, item->newname, item->part,
+                              item->uidvalidity, sync_be, flags);
+            if (r) {
+                syslog(LOG_ERR, "do_folders(): failed to rename: %s -> %s ",
+                       item->oldname, item->newname);
+                goto bail;
+            }
+
+            rename_folders->done++;
+            item->done = 1;
+            rename_success = 1;
+        }
+
+        if (!rename_success) {
             /* Scanned entire list without a match */
             const char *name = "unknown";
             if (item2) name = item2->oldname;
