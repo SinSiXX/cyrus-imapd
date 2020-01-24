@@ -2186,11 +2186,13 @@ static int _rename_move_partition(const mbentry_t *mbentry,
     const char *oldname = mbentry->name;
     int mupdatecommiterror = 0;
     struct mailbox *oldmailbox = NULL;
-    const char *root = NULL;
     mupdate_handle *mupdate_h = NULL;
     mbentry_t *newmbentry = NULL;
 
     assert_namespacelocked(mbentry->name);
+
+    /* No partition, we're definitely not moving anywhere */
+    if (!partition) return IMAP_MAILBOX_EXISTS;
 
     // intermediates don't need to be moved
     if (mbentry->mbtype & MBTYPE_INTERMEDIATE) return 0;
@@ -2201,24 +2203,20 @@ static int _rename_move_partition(const mbentry_t *mbentry,
 
     const char *oldpath = mailbox_datapath(oldmailbox, 0);
 
-    /* No partition, we're definitely not moving anywhere */
-    if (!partition) {
-        r = IMAP_MAILBOX_EXISTS;
-        goto done;
-    }
-
     /* this is OK because it uses a different static buffer */
-    root = config_partitiondir(partition);
+    const char *root = config_partitiondir(partition);
     if (!root) {
-        r = IMAP_PARTITION_UNKNOWN;
-        goto done;
+        mailbox_close(&oldmailbox);
+        return IMAP_PARTITION_UNKNOWN;
     }
     if (!strncmp(root, oldpath, strlen(root)) &&
         oldpath[strlen(root)] == '/') {
         /* partitions are the same or share common prefix */
-        r = IMAP_MAILBOX_EXISTS;
-        goto done;
+        mailbox_close(&oldmailbox);
+        return IMAP_MAILBOX_EXISTS;
     }
+
+    /* from here, we're going to need to clean up because we've started doing stuff! */
 
     r = mailbox_copy_files(oldmailbox, partition, oldmailbox->name, oldmailbox->uniqueid);
     if (r) goto done;
@@ -2265,13 +2263,16 @@ static int _rename_move_partition(const mbentry_t *mbentry,
                 syslog(LOG_ERR, "DBERROR: mailboxdb on mupdate has entry for %s, mailboxdb on backend has entry for %s",
                        mbentry->partition, partition);
                 r = IMAP_IOERROR;
+                // we've moved the data, so clean up the old location
                 mailbox_delete_cleanup(NULL, mbentry->partition, mbentry->name, mbentry->uniqueid);
             } else {
                 r = mupdatecommiterror;
+                // we successfully changed the mailboxes.db back, so remove the NEW location
                 mailbox_delete_cleanup(NULL, partition, mbentry->name, mbentry->uniqueid);
             }
         }
         else {
+            // there was an error, so clean up the new location
             mailbox_delete_cleanup(NULL, partition, mbentry->name, mbentry->uniqueid);
         }
 
@@ -2285,6 +2286,7 @@ static int _rename_move_partition(const mbentry_t *mbentry,
                    mbentry->partition, partition);
         /* this will sync-log the name anyway */
         mailbox_close(&oldmailbox);
+        // move was successful, so clean up the old location
         mailbox_delete_cleanup(NULL, mbentry->partition, mbentry->name, mbentry->uniqueid);
     }
 
