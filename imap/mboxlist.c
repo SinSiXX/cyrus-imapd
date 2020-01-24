@@ -700,10 +700,10 @@ EXPORTED char *mboxlist_find_uniqueid(const char *uniqueid, const char *userid,
 
     init_internal();
 
-    if (userid)
+    if (userid && !have_runq)
         mboxlist_usermboxtree(userid, auth_state, _find_uniqueid, &rock, flags);
     else
-        mboxlist_allmbox("", _find_uniqueid, &rock, flags);
+        mboxlist_foreach_uniqueid(uniqueid, _find_uniqueid, &rock, flags);
 
     return rock.mboxname;
 }
@@ -3251,6 +3251,7 @@ struct _foreach_uniqueid_data {
     const char *uniqueid;
     mboxlist_cb *proc;
     void *rock;
+    int flags;
 };
 
 static int _foreach_uniqueid(const mbentry_t *mbentry, void *rock) {
@@ -3264,6 +3265,8 @@ static int _foreach_uniqueid(const mbentry_t *mbentry, void *rock) {
             copy.name = mbentry->name;
             return d->proc(&copy, d->rock);
         }
+        // if we're not doing tombstones, don't check the rest
+        if (!(d->flags & MBOXTREE_TOMBSTONES)) break;
     }
 
     return 0;
@@ -3272,7 +3275,7 @@ static int _foreach_uniqueid(const mbentry_t *mbentry, void *rock) {
 EXPORTED int mboxlist_foreach_uniqueid(const char *uniqueid, mboxlist_cb *proc,
                                        void *rock, int flags)
 {
-    struct _foreach_uniqueid_data crock = { uniqueid, proc, rock };
+    struct _foreach_uniqueid_data crock = { uniqueid, proc, rock, flags };
     struct allmb_rock mbrock = { NULL, _foreach_uniqueid, &crock, flags };
     int r = 0;
 
