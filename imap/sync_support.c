@@ -656,6 +656,18 @@ struct sync_folder *sync_folder_lookup(struct sync_folder_list *l,
     return NULL;
 }
 
+struct sync_folder *sync_folder_lookup_byname(struct sync_folder_list *l,
+                                              const char *name)
+{
+    struct sync_folder *p;
+
+    for (p = l->head; p; p = p->next) {
+        if (!strcmp(p->name, name))
+            return p;
+    }
+    return NULL;
+}
+
 static void _item_free(struct sync_folder *item)
 {
     free(item->uniqueid);
@@ -3129,14 +3141,15 @@ static int sync_mailbox_byentry(const mbentry_t *mbentry, void *rock)
     struct mailbox *mailbox = NULL;
     struct dlist *kl = dlist_newkvlist(NULL, "MAILBOX");
     annotate_state_t *astate = NULL;
+    int r = 0;
 
     if (mbentry->mbtype & (MBTYPE_DELETED|MBTYPE_INTERMEDIATE)) {
         dlist_setatom(kl, "UNIQUEID", mbentry->uniqueid);
         dlist_setatom(kl, "MBOXNAME", mbentry->name);
         dlist_setatom(kl, "MBOXTYPE", mboxlist_mbtype_to_string(mbentry->mbtype));
         dlist_setnum32(kl, "UIDVALIDITY", mbentry->uidvalidity);
-        dlist_setatom(kl, "PARTITION", mbentry->partition);
         // this nonsense we probably don't need, but sync_client might barf without it
+        dlist_setatom(kl, "PARTITION", mbentry->partition);
         dlist_setatom(kl, "ACL", mbentry->acl);
         dlist_setnum32(kl, "SYNC_CRC", 0);
         dlist_setnum32(kl, "LAST_UID", 0);
@@ -3152,7 +3165,7 @@ static int sync_mailbox_byentry(const mbentry_t *mbentry, void *rock)
         goto out;
     }
 
-    int r = mailbox_open_irl(mbentry->name, &mailbox);
+    r = mailbox_open_irl(mbentry->name, &mailbox);
     if (!r) r = sync_mailbox_version_check(&mailbox);
     /* doesn't exist?  Probably not finished creating or removing yet */
     if (r == IMAP_MAILBOX_NONEXISTENT ||
@@ -6110,7 +6123,6 @@ static int do_folders(struct sync_name_list *mboxname_list, const char *topart,
         if (rfolder->mark) continue;
         rfolder->mark = 1;
 
-
         /* does it no longer exist on the master?  Remove it from the replica */
         if (!FOLDER_ALIVE(mfolder)) {
             /* if it's tombstones at both ends, nothing to do! */
@@ -6193,27 +6205,41 @@ static int do_folders(struct sync_name_list *mboxname_list, const char *topart,
             rename_success = 1;
         }
 
+        // fallback algorithm - look for a name in the master history which
+        // has also been used for this mailbox!
         if (!rename_success) {
             for (item = rename_folders->head; item; item = item->next) {
                 if (item->done) continue;
 
-                item2 = sync_rename_lookup(rename_folders, item->newname);
-                if (!item2) continue;
+                mfolder = sync_folder_lookup(master_folders, item->uniqueid);
+                if (!mfolder) continue;
 
-                // look for an unused name in the history of item2
+                struct sync_folder *other;
+                for (other = mfolder->others; other; other = other->others) {
+                    rfolder = sync_folder_lookup_byname(replica_folders, other->name);
+                    if (rfolder) continue; // name exists on the replica
+                    // otherwise, we've found a temporary name to rename to!
+                    syslog(LOG_NOTICE, "do_folders(): loop resolution - renaming %s to %s on the way to %s",
+                           item->oldname, other->name, item->newname);
+                    r = folder_rename(item->oldname, other->name, item->part,
+                                      item->uidvalidity, sync_be, flags);
+                    if (r) {
+                        syslog(LOG_ERR, "do_folders(): failed to rename: %s -> %s ",
+                               item->oldname, other->name);
+                        goto bail;
+                    }
 
-            /* Found unprocessed item which should rename cleanly */
-            r = folder_rename(item->oldname, item->newname, item->part,
-                              item->uidvalidity, sync_be, flags);
-            if (r) {
-                syslog(LOG_ERR, "do_folders(): failed to rename: %s -> %s ",
-                       item->oldname, item->newname);
-                goto bail;
+                    // and we've still got another rename to do on this mailbox later
+                    sync_rename_list_add(rename_folders, item->uniqueid, other->name,
+                                         item->newname, item->part, item->uidvalidity);
+
+                    rename_folders->done++;
+                    item->done = 1;
+                    rename_success = 1;
+                    break;
+                }
+                if (rename_success) break; // just fix one, maybe the rest can use the regular algorithm
             }
-
-            rename_folders->done++;
-            item->done = 1;
-            rename_success = 1;
         }
 
         if (!rename_success) {
