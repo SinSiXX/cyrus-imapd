@@ -1871,7 +1871,7 @@ static int getcalendarevents_getinstances(json_t *jsevent,
 {
     jmap_req_t *req = rock->req;
     icalcomponent *myical = NULL;
-    mbentry_t *mbentry = jmap_mbentry_from_dav(&cdata->dav);
+    mbentry_t *mbentry = jmap_mbentry_from_dav(req, &cdata->dav);
     int r = 0;
 
     int i;
@@ -4220,7 +4220,7 @@ static int eventquery_fastpath_cb(void *rock, struct caldav_data *cdata)
         return 0;
     }
 
-    mbentry_t *mbentry = jmap_mbentry_from_dav(&cdata->dav);
+    mbentry_t *mbentry = jmap_mbentry_from_dav(req, &cdata->dav);
 
     /* Check permissions */
     int rights = mbentry ? jmap_hasrights(req, mbentry, DACL_READ) : 0;
