@@ -1564,6 +1564,7 @@ static int jmap_calendarevent_getblob(jmap_req_t *req,
     struct caldav_data *cdata = NULL;
     struct mailbox *mailbox = NULL;
     icalcomponent *ical = NULL;
+    mbentry_t *mbentry = NULL;
     char *uid = NULL;
     char *userid = NULL;
     modseq_t modseq;
@@ -1595,7 +1596,9 @@ static int jmap_calendarevent_getblob(jmap_req_t *req,
         res = HTTP_NOT_FOUND;
         goto done;
     }
-    if (!jmap_hasrights_byname(req, cdata->dav.mailbox, DACL_READ)) {
+
+    mbentry = jmap_mbentry_from_dav(req, &cdata->dav);
+    if (!mbentry || !jmap_hasrights(req, mbentry, DACL_READ)) {
         res = HTTP_NOT_FOUND;
         goto done;
     }
@@ -1607,7 +1610,7 @@ static int jmap_calendarevent_getblob(jmap_req_t *req,
     }
 
     /* Open mailbox, we need it now */
-    if ((r = jmap_openmbox(req, cdata->dav.mailbox, &mailbox, 0))) {
+    if ((r = jmap_openmbox(req, mbentry->name, &mailbox, 0))) {
         req->txn->error.desc = error_message(r);
         res = HTTP_SERVER_ERROR;
         goto done;
@@ -1728,6 +1731,7 @@ done:
     if (ical) icalcomponent_free(ical);
     if (mailbox) jmap_closembox(req, &mailbox);
     if (db) caldav_close(db);
+    mboxlist_entry_free(&mbentry);
     buf_free(&buf);
     free(userid);
     free(uid);
